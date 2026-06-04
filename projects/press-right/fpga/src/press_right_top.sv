@@ -191,11 +191,26 @@ module press_right_top (
         .thousands(d3), .hundreds(d2), .tens(d1), .ones(d0)
     );
 
-    seven_segment hex0_dec (.value(d0), .segments(HEX0));
-    seven_segment hex1_dec (.value(d1), .segments(HEX1));
-    seven_segment hex2_dec (.value(d2), .segments(HEX2));
-    seven_segment hex3_dec (.value(d3), .segments(HEX3));
+    // Registered display values — latch on tick so segments only update every 10 ms
+    reg [3:0] disp3, disp2, disp1;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            disp3 <= 0; disp2 <= 0; disp1 <= 0;
+        end else if (tick) begin
+            disp3 <= d3; disp2 <= d2; disp1 <= d1;
+        end
+    end
 
+    // DEBUG: SW[1:0]=00->0, 01->2, 10->3, 11->normal
+    wire [3:0] hex2_test = (SW[1:0] == 2'b00) ? 4'd0 :
+                           (SW[1:0] == 2'b01) ? 4'd2 :
+                           (SW[1:0] == 2'b10) ? 4'd3 : disp2;
+
+    seven_segment hex0_dec (.value(4'd0),    .segments(HEX0));  // fixed 0
+    seven_segment hex1_dec (.value(disp1),   .segments(HEX1));
+    seven_segment hex2_dec (.value(hex2_test),.segments(HEX2));
+    seven_segment hex3_dec (.value(disp3),   .segments(HEX3));
+ 
     // HEX4/5 blank
     assign HEX4 = 8'hFF;
     assign HEX5 = 8'hFF;

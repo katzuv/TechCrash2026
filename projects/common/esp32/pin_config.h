@@ -32,10 +32,10 @@
 #define PIN_SERVO           18      // PWM output (LEDC)
 
 // ---- Buzzer ----
-#define PIN_BUZZER          19      // PWM output (LEDC)
+#define PIN_BUZZER          23      // PWM output (LEDC)
 
 // ---- LEDs ----
-#define PIN_LED_1           23      // LED 1
+#define PIN_LED_1           19      // LED 1
 #define PIN_LED_2            2      // LED 2 (also onboard LED on most DevKits)
 #define PIN_LED_3           15      // LED 3
 

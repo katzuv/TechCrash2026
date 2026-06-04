@@ -12,7 +12,7 @@
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 HardwareSerial FpgaSerial(2);
 
-// ---- Buzzer helpers ----
+// ---- Buzzer helpers (passive buzzer — PWM) ----
 void playVictory() {
     // Three rising tones
     int freqs[] = {784, 988, 1319};
@@ -24,8 +24,8 @@ void playVictory() {
 }
 
 void playMiss() {
-    ledcWriteTone(0, 300);
-    delay(1000);
+    ledcWriteTone(0, 100);
+    delay(800);
     ledcWriteTone(0, 0);
 }
 
@@ -68,10 +68,9 @@ void setup() {
     Serial.begin(115200);
     Serial.println("\n--- Press Right ---");
 
-    // Buzzer
+    // Buzzer — passive buzzer on GPIO 23, PWM via LEDC
     ledcSetup(0, 2000, 8);
     ledcAttachPin(PIN_BUZZER, 0);
-    ledcWriteTone(0, 0);
 
     Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
     if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
