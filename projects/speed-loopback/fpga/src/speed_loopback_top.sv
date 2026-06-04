@@ -1,16 +1,33 @@
-// Speed Loopback Top Module
-// FPGA generates N random bytes, sends to ESP32 via UART.
+// Speed Loopback Top Module — PARALLEL 8-bit interface
+// FPGA generates N random bytes, sends to ESP32 via 8-bit parallel bus.
 // ESP32 sums them and sends back checksum (LSB 8 bits).
 // FPGA compares and displays elapsed time in ms.
 //
-// Protocol: FPGA sends 4-byte header (N, little-endian) then N random bytes.
-//           ESP32 sends back 1 byte (sum & 0xFF).
+// Parallel interface (Arduino header):
+//   ARDUINO_IO[8:1] = DATA[7:0]   bidirectional: FPGA drives during send,
+//                                  ESP32 drives during response
+//   ARDUINO_IO[9]   = TX_CLK      FPGA output (1 pulse per byte)
+//   ARDUINO_IO[10]  = RX_VALID    ESP32 output (pulse after checksum is ready)
 //
-// Fixed count: 10,000 bytes
-// SW[9]   debug mode: in DONE, show expected/received checksums instead of timer
+// Wiring (jumper wires from Arduino header to ESP32):
+//   ARDUINO_IO[1]  <-> ESP32 GPIO5   (DATA[0])
+//   ARDUINO_IO[2]  <-> ESP32 GPIO13  (DATA[1])
+//   ARDUINO_IO[3]  <-> ESP32 GPIO14  (DATA[2])
+//   ARDUINO_IO[4]  <-> ESP32 GPIO27  (DATA[3])
+//   ARDUINO_IO[5]  <-> ESP32 GPIO26  (DATA[4])
+//   ARDUINO_IO[6]  <-> ESP32 GPIO25  (DATA[5])
+//   ARDUINO_IO[7]  <-> ESP32 GPIO33  (DATA[6])
+//   ARDUINO_IO[8]  <-> ESP32 GPIO32  (DATA[7])
+//   ARDUINO_IO[9]  <-> ESP32 GPIO35  (TX_CLK, input-only on ESP32)
+//   ARDUINO_IO[10] <-> ESP32 GPIO16  (RX_VALID, output from ESP32)
+//
+// Fixed infrastructure (UNCHANGED per challenge rules):
+//   LFSR-16, sum accumulator, timer, comparator, state machine, data count
+//
+// SW[9]   debug mode: show expected/received checksums instead of timer
 // KEY[0]  start / restart
 // KEY[1]  reset (active low)
-// HEX5-0  show timer_ms (hex) in DONE, progress during send, count in IDLE
+// HEX5-0  elapsed ms (hex) in DONE, progress during send, count in IDLE
 // LEDR[9] running, LEDR[0] pass, LEDR[1] fail
 
 module speed_loopback_top(
@@ -43,7 +60,7 @@ module speed_loopback_top(
     // ---- Checksum accumulator ----
     reg [31:0] sum;
 
-    // ---- Parallel TX (FPGA -> ESP32 on ARDUINO_IO[8:1] + CLK on [9]) ----
+    // ---- Parallel TX (FPGA -> ESP32) ----
     reg        tx_start;
     reg  [7:0] tx_data;
     wire       tx_busy;
@@ -51,33 +68,35 @@ module speed_loopback_top(
     wire [7:0] par_data_out;
     wire       par_clk_out;
 
-    uart_tx #(.CLK_FREQ(50_000_000), .BAUD(9600)) u_tx (
+    parallel_tx u_tx (
         .clk(clk), .rst_n(rst_n),
         .tx_start(tx_start), .tx_data(tx_data),
-        .tx_busy(tx_busy),
-        .tx_active(tx_active), .par_data(par_data_out), .par_clk(par_clk_out)
+        .tx_busy(tx_busy),   .tx_active(tx_active),
+        .par_data(par_data_out), .par_clk(par_clk_out)
     );
 
-    // ---- Parallel RX (ESP32 -> FPGA: data on ARDUINO_IO[8:1], valid on [10]) ----
+    // ---- Parallel RX (ESP32 -> FPGA): data on ARDUINO_IO[8:1], valid on [10] ----
     wire [7:0] rx_data;
     wire       rx_valid;
 
-    uart_rx #(.CLK_FREQ(50_000_000), .BAUD(9600)) u_rx (
+    parallel_rx u_rx (
         .clk(clk), .rst_n(rst_n),
-        .par_data(ARDUINO_IO[8:1]), .par_valid(ARDUINO_IO[10]),
+        .par_data(ARDUINO_IO[8:1]),
+        .par_valid(ARDUINO_IO[10]),
         .rx_data(rx_data), .rx_valid(rx_valid)
     );
 
     // ---- Arduino Header IO ----
-    // DATA[7:0] on ARDUINO_IO[8:1]: FPGA drives while tx_active, high-Z while waiting
+    // DATA[7:0] bidirectional: FPGA drives when tx_active, else high-Z (ESP32 drives)
     genvar g;
     generate
         for (g = 1; g <= 8; g++) begin : gen_data
             assign ARDUINO_IO[g] = tx_active ? par_data_out[g-1] : 1'bz;
         end
     endgenerate
-    assign ARDUINO_IO[9]     = par_clk_out;   // TX CLK — FPGA output
-    assign ARDUINO_IO[10]    = 1'bz;           // RX_VALID — ESP32 drives, FPGA reads
+
+    assign ARDUINO_IO[9]     = par_clk_out;  // TX CLK: FPGA output
+    assign ARDUINO_IO[10]    = 1'bz;         // RX_VALID: ESP32 drives, FPGA reads
     assign ARDUINO_IO[0]     = 1'bz;
     assign ARDUINO_IO[15:11] = {5{1'bz}};
 
@@ -143,7 +162,7 @@ module speed_loopback_top(
                 timer_running <= 1;
             end else begin
                 case (state)
-                    S_IDLE: ;   // wait for start_pulse (handled above)
+                    S_IDLE: ;   // wait for start_pulse
 
                     // Send 4-byte header: total_count little-endian
                     S_HDR: begin
@@ -186,7 +205,7 @@ module speed_loopback_top(
                         end
                     end
 
-                    S_DONE: ;   // wait for start_pulse (handled above)
+                    S_DONE: ;   // wait for start_pulse
                 endcase
             end
         end
@@ -200,8 +219,8 @@ module speed_loopback_top(
             S_HDR:   disp = 24'd0;
             S_DATA:  disp = send_count[23:0];
             S_WAIT:  disp = send_count[23:0];
-            S_DONE:  disp = SW[9] ? {8'd0, sum[7:0], rx_checksum}   // debug
-                                  : timer_ms[23:0];                  // elapsed ms
+            S_DONE:  disp = SW[9] ? {8'd0, sum[7:0], rx_checksum}
+                                  : timer_ms[23:0];
             default: disp = 24'd0;
         endcase
     end
@@ -216,10 +235,7 @@ module speed_loopback_top(
     // ---- LEDs ----
     assign LEDR[9]   = timer_running;
     assign LEDR[8]   = (state == S_DONE);
-    assign LEDR[7]   = tx_active;        // lit while FPGA is driving data bus
-    assign LEDR[6]   = par_clk_out;      // pulses each byte (blurs at 1 MHz)
-    assign LEDR[5:3] = state[2:0];       // 001=HDR,010=DATA,011=WAIT,100=DONE
-    assign LEDR[2]   = 1'b0;
+    assign LEDR[7:2] = 6'd0;
     assign LEDR[1]   = (state == S_DONE) & ~pass;
     assign LEDR[0]   = (state == S_DONE) &  pass;
 

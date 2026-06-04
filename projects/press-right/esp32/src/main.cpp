@@ -18,7 +18,7 @@ void playVictory() {
     int freqs[] = {784, 988, 1319};
     for (int i = 0; i < 3; i++) {
         ledcWriteTone(0, freqs[i]);
-        delay(300);
+        delay(10000);
     }
     ledcWriteTone(0, 0);
 }

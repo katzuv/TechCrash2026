@@ -1,32 +1,26 @@
-// Parallel 8-bit TX — replaces UART TX for Speed Loopback challenge.
-// Drives DATA[7:0] + CLK instead of a serial bit; ~1 MHz byte rate at 50 MHz.
+// Parallel 8-bit TX: drives DATA[7:0] + CLK for one byte per transfer
+// Replaces uart_tx — same handshake interface (tx_start / tx_busy).
 //
-// Interface is backward-compatible with the top module:
-//   tx_start / tx_data / tx_busy (unchanged)
-//   tx_active  — 1 while this module is driving the bus (use for tristate)
-//   par_data   — 8-bit data bus output
-//   par_clk    — clock output (1 pulse per byte, ESP32 samples on rising edge)
+// Pin timing (default = 1 MHz byte rate at 50 MHz FPGA clock):
+//   SETUP_CYCLES   = data stable, CLK=0 before rising edge
+//   CLK_HIGH_CYCS  = CLK=1, ESP32 samples here
+//   CLK_LOW_CYCS   = CLK=0 after byte, next-byte prep window
 //
-// Timing per byte (default = 50 FPGA cycles = 1 µs = 1 MHz byte rate):
-//   SETUP_CYCLES  : data valid, CLK=0  (100 ns)
-//   CLK_HIGH_CYCS : CLK=1, ESP32 samples here  (500 ns)
-//   CLK_LOW_CYCS  : CLK=0, next-byte prep  (400 ns)
+// tx_active: high whenever this module is driving the bus (use for tristate)
 
-module uart_tx #(
-    parameter CLK_FREQ      = 50_000_000,   // kept for port compatibility
-    parameter BAUD          = 9600,         // kept for port compatibility
-    parameter SETUP_CYCLES  = 5,
-    parameter CLK_HIGH_CYCS = 25,
-    parameter CLK_LOW_CYCS  = 20
+module parallel_tx #(
+    parameter SETUP_CYCLES  = 5,    // 100 ns data setup
+    parameter CLK_HIGH_CYCS = 25,   // 500 ns CLK high  (ESP32 must sample here)
+    parameter CLK_LOW_CYCS  = 20    // 400 ns CLK low
 )(
-    input             clk,
-    input             rst_n,
-    input             tx_start,
-    input      [7:0]  tx_data,
-    output reg        tx_busy,
-    output reg        tx_active,
-    output reg [7:0]  par_data,
-    output reg        par_clk
+    input              clk,
+    input              rst_n,
+    input              tx_start,
+    input       [7:0]  tx_data,
+    output reg         tx_busy,
+    output reg         tx_active,   // 1 = FPGA is driving par_data
+    output reg  [7:0]  par_data,
+    output reg         par_clk
 );
 
     localparam S_IDLE     = 2'd0,
@@ -48,14 +42,15 @@ module uart_tx #(
         end else begin
             case (state)
                 S_IDLE: begin
-                    par_clk   <= 0;
-                    tx_active <= 0;
+                    par_clk <= 0;
                     if (tx_start) begin
                         par_data  <= tx_data;
                         tx_busy   <= 1;
                         tx_active <= 1;
                         cnt       <= 0;
                         state     <= S_SETUP;
+                    end else begin
+                        tx_active <= 0;
                     end
                 end
 

@@ -1,89 +1,39 @@
-// UART Receiver — parameterized baud rate
-// 8N1: 1 start bit, 8 data bits, 1 stop bit
+// Parallel 8-bit RX — replaces UART RX for Speed Loopback challenge.
+// Captures the 1-byte checksum from ESP32 when par_valid pulses high.
+//
+// par_data[7:0] must be stable when par_valid rises; ESP32 holds it for 2 ms.
+// 3-stage synchroniser on par_valid prevents metastability.
 
 module uart_rx #(
-    parameter CLK_FREQ = 50_000_000,
-    parameter BAUD     = 9600
+    parameter CLK_FREQ = 50_000_000,    // kept for port compatibility
+    parameter BAUD     = 9600           // kept for port compatibility
 )(
-    input        clk,
-    input        rst_n,
-    input        rx_in,
-    output reg [7:0] rx_data,
-    output reg       rx_valid
+    input             clk,
+    input             rst_n,
+    input      [7:0]  par_data,         // driven by ESP32 (FPGA bus in high-Z)
+    input             par_valid,        // ESP32 pulses high when checksum is ready
+    output reg [7:0]  rx_data,
+    output reg        rx_valid
 );
 
-    localparam BIT_PERIOD = CLK_FREQ / BAUD;
-    localparam HALF_BIT   = BIT_PERIOD / 2;
-
-    // Metastability sync
-    reg [1:0] rx_sync;
-    wire rx_bit = rx_sync[1];
-    always @(posedge clk) rx_sync <= {rx_sync[0], rx_in};
-
-    localparam S_IDLE  = 2'd0,
-               S_START = 2'd1,
-               S_DATA  = 2'd2,
-               S_STOP  = 2'd3;
-
-    reg [1:0]  state;
-    reg [15:0] clk_cnt;
-    reg [2:0]  bit_idx;
-    reg [7:0]  shift;
+    // 3-stage synchroniser for par_valid
+    reg [2:0] vsync;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) vsync <= 0;
+        else        vsync <= {vsync[1:0], par_valid};
+    end
+    wire valid_rise = vsync[1] & ~vsync[2];   // rising edge of synchronised signal
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            state    <= S_IDLE;
             rx_data  <= 0;
             rx_valid <= 0;
-            clk_cnt  <= 0;
-            bit_idx  <= 0;
-            shift    <= 0;
         end else begin
             rx_valid <= 0;
-
-            case (state)
-                S_IDLE: begin
-                    if (!rx_bit) begin          // falling edge = start bit
-                        state   <= S_START;
-                        clk_cnt <= 0;
-                    end
-                end
-
-                S_START: begin
-                    if (clk_cnt == HALF_BIT - 1) begin
-                        if (!rx_bit) begin      // still low at mid-bit
-                            state   <= S_DATA;
-                            clk_cnt <= 0;
-                            bit_idx <= 0;
-                        end else
-                            state <= S_IDLE;     // glitch
-                    end else
-                        clk_cnt <= clk_cnt + 1;
-                end
-
-                S_DATA: begin
-                    if (clk_cnt == BIT_PERIOD - 1) begin
-                        clk_cnt <= 0;
-                        shift   <= {rx_bit, shift[7:1]};   // LSB first
-                        if (bit_idx == 7)
-                            state <= S_STOP;
-                        else
-                            bit_idx <= bit_idx + 1;
-                    end else
-                        clk_cnt <= clk_cnt + 1;
-                end
-
-                S_STOP: begin
-                    if (clk_cnt == BIT_PERIOD - 1) begin
-                        if (rx_bit) begin       // valid stop bit
-                            rx_data  <= shift;
-                            rx_valid <= 1;
-                        end
-                        state <= S_IDLE;
-                    end else
-                        clk_cnt <= clk_cnt + 1;
-                end
-            endcase
+            if (valid_rise) begin
+                rx_data  <= par_data;   // stable for >> 60 ns at this point
+                rx_valid <= 1;
+            end
         end
     end
 
