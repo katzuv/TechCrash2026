@@ -11,7 +11,7 @@
 //   ARDUINO_IO[6]  → GPIO19  DATA[5]  │
 //   ARDUINO_IO[7]  → GPIO23  DATA[6]  │
 //   ARDUINO_IO[8]  → GPIO0   DATA[7]  ┘  (boot pin — OK as input at runtime)
-//   ARDUINO_IO[9]  → GPIO35  TX_CLK      (input-only pin, opposite side)
+//   ARDUINO_IO[9]  → GPIO15  TX_CLK      (GPIO5 side)
 //   ARDUINO_IO[10] → GPIO16  RX_VALID    (GPIO5 side, output to FPGA)
 //   GND            → GND
 
@@ -24,26 +24,23 @@
 
 // ---- Parallel interface pin assignments ----
 // DATA[i] → GPIO:  0→2, 1→4, 2→5, 3→17, 4→18, 5→19, 6→23, 7→0
-// All 8 data pins are on the GPIO5 side of the board.
+// CLK → GPIO15.  All 10 wires are on the GPIO5 side of the board.
 // GPIO0 (DATA[7]) is a boot-strapping pin — always configure as INPUT first.
 static const int DATA_PINS[8] = {2, 4, 5, 17, 18, 19, 23, 0};
 
-#define PIN_CLK       35    // TX_CLK from FPGA  (input-only GPIO, opposite side)
+#define PIN_CLK       15    // TX_CLK from FPGA  (GPIO5 side, bit 15 of GPIO.in)
 #define PIN_RX_VALID  16    // RX_VALID to FPGA  (GPIO5 side)
 
-// GPIO register bit positions used during fast receive:
-//   All 8 DATA bits live in GPIO.in (GPIO0-31) — single register read.
-//   CLK lives in GPIO.in1 bit 3 (GPIO35).
+// All signals now live in GPIO.in (GPIO0-31) — single register covers CLK + DATA.
 
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 
 // ---- Receive one byte: wait for CLK rising edge then sample DATA[7:0] ----
 static inline uint8_t IRAM_ATTR recv_byte() {
-    // Ensure we catch a fresh edge (skip if CLK is still high from last byte)
-    while ((GPIO.in1.val >> 3) & 1);     // wait for CLK LOW
-    while (!((GPIO.in1.val >> 3) & 1));  // wait for CLK HIGH
+    while ((GPIO.in >> 15) & 1);      // wait for CLK LOW  (GPIO15)
+    while (!((GPIO.in >> 15) & 1));   // wait for CLK HIGH
 
-    uint32_t lo = GPIO.in;   // single read captures all 8 data bits
+    uint32_t lo = GPIO.in;   // single read captures CLK + all 8 data bits
 
     uint8_t b  = ((lo >>  2) & 1) << 0;  // DATA[0] = GPIO2
     b |= ((lo >>  4) & 1) << 1;          // DATA[1] = GPIO4
@@ -94,7 +91,7 @@ void setup() {
     for (int i = 0; i < 8; i++) {
         pinMode(DATA_PINS[i], INPUT);
     }
-    // GPIO35 is input-only, nothing to configure
+    pinMode(PIN_CLK, INPUT);
     pinMode(PIN_RX_VALID, OUTPUT);
     digitalWrite(PIN_RX_VALID, LOW);
 
